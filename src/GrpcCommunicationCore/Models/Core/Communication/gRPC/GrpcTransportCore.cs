@@ -2,6 +2,7 @@ using Grpc.Core;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using System.Runtime.CompilerServices;
 using ZLogger;
 
 namespace Models.Core.Communication.gRPC;
@@ -52,7 +53,8 @@ public sealed class GrpcTransportCore
         CancellationToken cancellationToken = default)
     {
         // 毎呼び出しでヘッダーと期限を組み立てることで、呼び出し単位の設定上書きを許可します。
-        var callOptions = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        var (callOptions, linkedTokenSource) = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        using var linkedTokenSourceScope = linkedTokenSource;
 
         try
         {
@@ -73,14 +75,33 @@ public sealed class GrpcTransportCore
         string operationName,
         Func<CallOptions, AsyncServerStreamingCall<TResponse>> callFactory,
         GrpcCallSettings? settings = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var callOptions = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        var (callOptions, linkedTokenSource) = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        using var linkedTokenSourceScope = linkedTokenSource;
         using var call = callFactory(callOptions);
 
-        // MoveNextAsync で順次受信し、到着した値をそのまま上位へ流します。
-        while (await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false))
+        // async iterator では yield を含む try/catch が使えないため、MoveNext 部分のみを捕捉します。
+        while (true)
         {
+            bool movedNext;
+            try
+            {
+                movedNext = await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false);
+            }
+
+            catch (RpcException ex)
+            {
+                _logger.ZLogWarning($"gRPC server stream failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
+                throw;
+            }
+
+            if (!movedNext)
+            {
+                break;
+            }
+
+            // MoveNextAsync で順次受信し、到着した値をそのまま上位へ流します。
             yield return call.ResponseStream.Current;
         }
     }
@@ -95,7 +116,8 @@ public sealed class GrpcTransportCore
         GrpcCallSettings? settings = null,
         CancellationToken cancellationToken = default)
     {
-        var callOptions = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        var (callOptions, linkedTokenSource) = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        using var linkedTokenSourceScope = linkedTokenSource;
 
         try
         {
@@ -124,25 +146,64 @@ public sealed class GrpcTransportCore
         Func<CallOptions, AsyncDuplexStreamingCall<TRequest, TResponse>> callFactory,
         IAsyncEnumerable<TRequest> requestStream,
         GrpcCallSettings? settings = null,
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var callOptions = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        var (callOptions, linkedTokenSource) = await BuildCallOptionsAsync(settings, cancellationToken).ConfigureAwait(false);
+        using var linkedTokenSourceScope = linkedTokenSource;
         using var call = callFactory(callOptions);
+        using var writeCancellationSource = CancellationTokenSource.CreateLinkedTokenSource(callOptions.CancellationToken);
 
         // 双方向ストリームは送信と受信を並行させる必要があるため、送信を別タスクで実行します。
-        var writeTask = WriteRequestsAsync(call.RequestStream, requestStream, callOptions.CancellationToken);
+        var writeTask = WriteRequestsAsync(call.RequestStream, requestStream, writeCancellationSource.Token);
         try
         {
-            while (await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false))
+            // async iterator では yield を含む try/catch が使えないため、MoveNext 部分のみを捕捉します。
+            while (true)
             {
+                bool movedNext;
+                try
+                {
+                    movedNext = await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false);
+                }
+                catch (RpcException ex)
+                {
+                    _logger.ZLogWarning($"gRPC duplex stream failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
+                    throw;
+                }
+
+                if (!movedNext)
+                {
+                    break;
+                }
+
                 yield return call.ResponseStream.Current;
             }
         }
         finally
         {
+            // 応答側が先に終了したら送信タスクへ停止を通知し、終了待ちのハングを防ぎます。
             if (!writeTask.IsCompleted)
             {
-                await writeTask.ConfigureAwait(false);
+                writeCancellationSource.Cancel();
+            }
+
+            try
+            {
+                if (writeTask.IsCompleted)
+                {
+                    await writeTask.ConfigureAwait(false);
+                }
+                else
+                {
+                    await writeTask.WaitAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException) when (writeCancellationSource.IsCancellationRequested || callOptions.CancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (TimeoutException)
+            {
+                _logger.ZLogWarning($"gRPC duplex write did not stop in time. operation={operationName} endpoint={_channelProvider.Endpoint}");
             }
         }
     }
@@ -152,12 +213,13 @@ public sealed class GrpcTransportCore
     /// </summary>
     /// <param name="settings">呼び出し設定です。</param>
     /// <param name="externalCancellationToken">外部キャンセルトークンです。</param>
-    /// <returns>組み立て済みの <see cref="CallOptions"/> です。</returns>
-    private async Task<CallOptions> BuildCallOptionsAsync(
+    /// <returns>組み立て済みの <see cref="CallOptions"/> と、必要時のみ生成される連結トークンソースです。</returns>
+    private async Task<(CallOptions CallOptions, CancellationTokenSource? LinkedTokenSource)> BuildCallOptionsAsync(
         GrpcCallSettings? settings,
         CancellationToken externalCancellationToken)
     {
-        var effectiveCancellationToken = CreateEffectiveCancellationToken(settings?.CancellationToken ?? default, externalCancellationToken);
+        var (effectiveCancellationToken, linkedTokenSource) =
+            CreateEffectiveCancellationToken(settings?.CancellationToken ?? default, externalCancellationToken);
         var headers = new Metadata();
 
         await AddAuthenticationHeadersAsync(headers, effectiveCancellationToken).ConfigureAwait(false);
@@ -170,7 +232,7 @@ public sealed class GrpcTransportCore
         }
 
         var deadline = ResolveDeadline(settings);
-        return new CallOptions(headers, deadline, effectiveCancellationToken);
+        return (new CallOptions(headers, deadline, effectiveCancellationToken), linkedTokenSource);
     }
 
     /// <summary>
@@ -259,9 +321,30 @@ public sealed class GrpcTransportCore
     /// </summary>
     /// <param name="first">呼び出し設定側トークンです。</param>
     /// <param name="second">メソッド引数側トークンです。</param>
-    /// <returns>実際に使用するトークンです。</returns>
-    private static CancellationToken CreateEffectiveCancellationToken(CancellationToken first, CancellationToken second)
-        => first.CanBeCanceled ? first : second;
+    /// <returns>実際に使用するトークンと、必要時のみ生成される連結トークンソースです。</returns>
+    private static (CancellationToken Token, CancellationTokenSource? LinkedTokenSource) CreateEffectiveCancellationToken(
+        CancellationToken first,
+        CancellationToken second)
+    {
+        if (first.CanBeCanceled && second.CanBeCanceled)
+        {
+            // 呼び出し設定側と外部側の両方でキャンセル可能な場合は、両者を連結します。
+            var linkedTokenSource = CancellationTokenSource.CreateLinkedTokenSource(first, second);
+            return (linkedTokenSource.Token, linkedTokenSource);
+        }
+
+        if (first.CanBeCanceled)
+        {
+            return (first, null);
+        }
+
+        if (second.CanBeCanceled)
+        {
+            return (second, null);
+        }
+
+        return (CancellationToken.None, null);
+    }
 
     /// <summary>
     /// 双方向ストリーミング用の要求ストリーム送信処理です。
