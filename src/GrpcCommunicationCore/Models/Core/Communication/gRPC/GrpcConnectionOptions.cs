@@ -28,9 +28,9 @@ public sealed class GrpcConnectionOptions
     public Uri? Endpoint { get; init; }
 
     /// <summary>
-    /// 呼び出しに適用する既定のデッドラインです。
+    /// 呼び出しに適用する既定のデッドラインです。0以下の場合は既定デッドラインを適用しません。
     /// </summary>
-    public TimeSpan DefaultDeadline { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan DefaultDeadline { get; init; } = TimeSpan.Zero;
 
     /// <summary>
     /// 接続確立時のタイムアウトです。
