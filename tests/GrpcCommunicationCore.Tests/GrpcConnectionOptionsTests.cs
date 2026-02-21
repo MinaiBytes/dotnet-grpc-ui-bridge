@@ -63,5 +63,6 @@ public class GrpcConnectionOptionsTests
         Assert.Equal(TimeSpan.Zero, options.DefaultDeadline);
         Assert.Equal(Timeout.InfiniteTimeSpan, options.KeepAlivePingDelay);
         Assert.Equal(Timeout.InfiniteTimeSpan, options.KeepAlivePingTimeout);
+        Assert.False(options.EnableMultipleHttp2Connections);
     }
 }

@@ -15,6 +15,8 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
 - 認証の切替
   - `None / BearerToken / ApiKey / MutualTls`
 - `GrpcChannel` の再利用
+- 画面単位セッションの生成
+  - `GrpcCommunicationSessionFactory`
 - ZLogger によるテキストログ出力
 - `ObservableCollection` へ反映する `GrpcStreamBindingAdapter<T>` の利用
 
@@ -34,8 +36,10 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
     - `DefaultDeadline = TimeSpan.Zero`（既定デッドライン無効）
     - `KeepAlivePingDelay = Timeout.InfiniteTimeSpan`
     - `KeepAlivePingTimeout = Timeout.InfiniteTimeSpan`
+    - `EnableMultipleHttp2Connections = false`
 - ストリーム受信で先頭削除が多い場合、内部でコレクション再構築に切り替えて CPU 使用率を抑えます
 - 応答遅延より負荷低減を優先したい場合は `uiBatchSize` を増やしてください（例: `128`）
+- N100 級 CPU で更新頻度が高い場合は `maxItemCount` を 300-1000 程度へ下げると負荷低減しやすいです
 
 ## 主要クラス
 
@@ -45,6 +49,8 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
   - `GrpcChannel` と `CallInvoker` の保持
 - `GrpcTransportCore`
   - 4種類のRPC実行
+- `GrpcCommunicationSessionFactory`
+  - 画面単位で作成/破棄する接続セッション生成
 - `GrpcStreamBindingAdapter<T>`
   - UI バインディング補助
 
@@ -70,6 +76,66 @@ services.AddGrpcCommunicationCore(options =>
 ```
 
 Bearer トークンを動的取得したい場合は `IBearerTokenProvider` を追加登録します。
+
+## 画面表示中だけ通信する（推奨）
+
+`GrpcChannelProvider` / `GrpcTransportCore` は Singleton として登録されます。  
+画面を表示している間だけ接続したい場合は、`GrpcCommunicationSessionFactory` から
+`GrpcCommunicationSession` を作成し、画面終了時に `Dispose` してください。
+
+```csharp
+using CommunityToolkit.Mvvm.ComponentModel;
+using CommunityToolkit.Mvvm.Input;
+using Grpc.Core;
+
+public partial class CpuUsageScreenViewModel : ObservableObject, IDisposable
+{
+    private readonly GrpcCommunicationSessionFactory _sessionFactory;
+    private readonly GrpcStreamBindingAdapter<CpuUsageReply> _adapter = new(maxItemCount: 500, uiBatchSize: 64, trimBatchSize: 128);
+    private GrpcCommunicationSession? _session;
+    private CancellationTokenSource? _cts;
+
+    public CpuUsageScreenViewModel(GrpcCommunicationSessionFactory sessionFactory)
+    {
+        _sessionFactory = sessionFactory;
+    }
+
+    [RelayCommand]
+    private async Task OnLoadedAsync()
+    {
+        if (_session is not null)
+        {
+            return;
+        }
+
+        _session = _sessionFactory.CreateSession();
+        _cts = new CancellationTokenSource();
+        var client = new MonitorService.MonitorServiceClient(_session.CallInvoker);
+        var request = new StreamCpuUsageRequest { MachineId = "PC-001" };
+
+        await _adapter.BindAsync(
+            _session.Transport.ServerStreamingAsync(
+                operationName: "MonitorService/StreamCpuUsage",
+                callFactory: options => client.StreamCpuUsage(request, options),
+                cancellationToken: _cts.Token),
+            cancellationToken: _cts.Token);
+    }
+
+    [RelayCommand]
+    private void OnUnloaded()
+    {
+        _cts?.Cancel();
+        _cts?.Dispose();
+        _cts = null;
+        _session?.Dispose();
+        _session = null;
+    }
+
+    public void Dispose() => OnUnloaded();
+}
+```
+
+Unary コマンドも同じ `_session.Transport.UnaryAsync(...)` で実行できます。
 
 Unary など短時間RPCに既定デッドラインを適用したい場合:
 

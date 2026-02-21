@@ -31,9 +31,11 @@ public class ServiceCollectionExtensionsTests
         using var provider = services.BuildServiceProvider();
         using var channelProvider = provider.GetRequiredService<GrpcChannelProvider>();
         var transport = provider.GetRequiredService<GrpcTransportCore>();
+        var sessionFactory = provider.GetRequiredService<GrpcCommunicationSessionFactory>();
 
         Assert.NotNull(channelProvider.CallInvoker);
         Assert.NotNull(transport);
+        Assert.NotNull(sessionFactory);
     }
 
     [Fact]

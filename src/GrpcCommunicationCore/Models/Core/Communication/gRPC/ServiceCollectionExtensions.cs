@@ -35,6 +35,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<GrpcChannelProvider>();
         services.TryAddSingleton<GrpcTransportCore>();
+        services.TryAddSingleton<GrpcCommunicationSessionFactory>();
 
         return services;
     }

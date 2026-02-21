@@ -53,6 +53,11 @@ public sealed class GrpcConnectionOptions
     public TimeSpan PooledConnectionIdleTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
     /// <summary>
+    /// HTTP/2 の複数接続を許可するかどうかを表します。既定値は無効です。
+    /// </summary>
+    public bool EnableMultipleHttp2Connections { get; init; }
+
+    /// <summary>
     /// 受信メッセージサイズ上限を指定します。
     /// </summary>
     public int? MaxReceiveMessageSize { get; init; } = 4 * 1024 * 1024;

@@ -83,7 +83,7 @@ public sealed class GrpcChannelProvider : IDisposable
             KeepAlivePingDelay = options.Connection.KeepAlivePingDelay,
             KeepAlivePingTimeout = options.Connection.KeepAlivePingTimeout,
             PooledConnectionIdleTimeout = options.Connection.PooledConnectionIdleTimeout,
-            EnableMultipleHttp2Connections = true
+            EnableMultipleHttp2Connections = options.Connection.EnableMultipleHttp2Connections
         };
 
         if (!options.Connection.UseTls)
