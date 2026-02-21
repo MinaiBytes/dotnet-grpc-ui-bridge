@@ -23,6 +23,19 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
 - `ILogger<T>` は DI から受け取ります
 - `logger` が `null` の場合は `NullLogger<T>` へフォールバックします
 
+## CPU/メモリチューニング方針
+
+- 既定値は GUI ステータス表示向けの軽量設定です
+  - `GrpcStreamBindingAdapter<T>`
+    - `maxItemCount = 2000`
+    - `uiBatchSize = 64`
+    - `trimBatchSize = 256`
+  - `GrpcConnectionOptions`
+    - `KeepAlivePingDelay = Timeout.InfiniteTimeSpan`
+    - `KeepAlivePingTimeout = Timeout.InfiniteTimeSpan`
+- ストリーム受信で先頭削除が多い場合、内部でコレクション再構築に切り替えて CPU 使用率を抑えます
+- 応答遅延より負荷低減を優先したい場合は `uiBatchSize` を増やしてください（例: `128`）
+
 ## 主要クラス
 
 - `GrpcCommunicationOptions`
@@ -57,6 +70,22 @@ services.AddGrpcCommunicationCore(options =>
 ```
 
 Bearer トークンを動的取得したい場合は `IBearerTokenProvider` を追加登録します。
+
+必要に応じて Keep-Alive ping を有効化する場合:
+
+```csharp
+services.AddGrpcCommunicationCore(options =>
+{
+    options.Connection = new GrpcConnectionOptions
+    {
+        Host = "10.0.0.25",
+        Port = 50051,
+        UseTls = true,
+        KeepAlivePingDelay = TimeSpan.FromSeconds(30),
+        KeepAlivePingTimeout = TimeSpan.FromSeconds(15)
+    };
+});
+```
 
 ## `.proto` からの利用例（Server Streaming）
 
@@ -158,10 +187,15 @@ public partial class CommandViewModel : ObservableObject
 ```csharp
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using System.Collections.ObjectModel;
 
 public partial class CpuUsageViewModel : ObservableObject
 {
     private readonly MonitorGateway _gateway;
+    private readonly GrpcStreamBindingAdapter<CpuUsageReply> _adapter = new(
+        maxItemCount: 1000,
+        uiBatchSize: 64,
+        trimBatchSize: 256);
     private CancellationTokenSource? _cts;
 
     [ObservableProperty]
@@ -173,7 +207,16 @@ public partial class CpuUsageViewModel : ObservableObject
     public CpuUsageViewModel(MonitorGateway gateway)
     {
         _gateway = gateway;
+        _adapter.Items.CollectionChanged += (_, e) =>
+        {
+            if (e.NewItems is { Count: > 0 } && e.NewItems[e.NewItems.Count - 1] is CpuUsageReply latest)
+            {
+                CurrentCpuUsage = latest.UsagePercent;
+            }
+        };
     }
+
+    public ReadOnlyObservableCollection<CpuUsageReply> Samples => _adapter.Items;
 
     [RelayCommand]
     private async Task StartAsync()
@@ -188,10 +231,7 @@ public partial class CpuUsageViewModel : ObservableObject
 
         try
         {
-            await foreach (var item in _gateway.StreamCpuUsageAsync("PC-001", _cts.Token))
-            {
-                CurrentCpuUsage = item.UsagePercent;
-            }
+            await _adapter.BindAsync(_gateway.StreamCpuUsageAsync("PC-001", _cts.Token), cancellationToken: _cts.Token);
         }
         catch (OperationCanceledException)
         {

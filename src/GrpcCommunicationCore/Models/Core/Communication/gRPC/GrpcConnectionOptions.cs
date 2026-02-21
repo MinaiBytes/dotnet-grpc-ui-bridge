@@ -1,3 +1,5 @@
+using System.Threading;
+
 namespace Models.Core.Communication.gRPC;
 
 /// <summary>
@@ -36,14 +38,14 @@ public sealed class GrpcConnectionOptions
     public TimeSpan ConnectTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
-    /// Keep-Alive Ping 送信間隔です。
+    /// Keep-Alive Ping 送信間隔です。既定値は無効化です。
     /// </summary>
-    public TimeSpan KeepAlivePingDelay { get; init; } = TimeSpan.FromSeconds(30);
+    public TimeSpan KeepAlivePingDelay { get; init; } = Timeout.InfiniteTimeSpan;
 
     /// <summary>
-    /// Keep-Alive Ping 応答待ち時間です。
+    /// Keep-Alive Ping 応答待ち時間です。既定値は無効化です。
     /// </summary>
-    public TimeSpan KeepAlivePingTimeout { get; init; } = TimeSpan.FromSeconds(15);
+    public TimeSpan KeepAlivePingTimeout { get; init; } = Timeout.InfiniteTimeSpan;
 
     /// <summary>
     /// 接続プール内のアイドル接続破棄までの時間です。
