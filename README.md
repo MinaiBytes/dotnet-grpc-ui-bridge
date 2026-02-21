@@ -11,7 +11,7 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
   - Client Streaming
   - Bidirectional Streaming
 - 接続設定の一元化
-  - `Host / Port / Endpoint / TLS / Deadline`
+  - `Host / Port / Endpoint / TLS / Deadline(任意)`
 - 認証の切替
   - `None / BearerToken / ApiKey / MutualTls`
 - `GrpcChannel` の再利用
@@ -31,6 +31,7 @@ GUI でのステータス表示用途を想定し、機能を最小限に絞っ�
     - `uiBatchSize = 64`
     - `trimBatchSize = 256`
   - `GrpcConnectionOptions`
+    - `DefaultDeadline = TimeSpan.Zero`（既定デッドライン無効）
     - `KeepAlivePingDelay = Timeout.InfiniteTimeSpan`
     - `KeepAlivePingTimeout = Timeout.InfiniteTimeSpan`
 - ストリーム受信で先頭削除が多い場合、内部でコレクション再構築に切り替えて CPU 使用率を抑えます
@@ -58,8 +59,7 @@ services.AddGrpcCommunicationCore(options =>
     {
         Host = "10.0.0.25",
         Port = 50051,
-        UseTls = true,
-        DefaultDeadline = TimeSpan.FromSeconds(10)
+        UseTls = true
     };
 
     options.Authentication = new GrpcAuthenticationOptions
@@ -70,6 +70,21 @@ services.AddGrpcCommunicationCore(options =>
 ```
 
 Bearer トークンを動的取得したい場合は `IBearerTokenProvider` を追加登録します。
+
+Unary など短時間RPCに既定デッドラインを適用したい場合:
+
+```csharp
+services.AddGrpcCommunicationCore(options =>
+{
+    options.Connection = new GrpcConnectionOptions
+    {
+        Host = "10.0.0.25",
+        Port = 50051,
+        UseTls = true,
+        DefaultDeadline = TimeSpan.FromSeconds(10)
+    };
+});
+```
 
 必要に応じて Keep-Alive ping を有効化する場合:
 
