@@ -6,11 +6,15 @@ using System.Reflection;
 
 namespace Models.Core.Communication.gRPC.Tests;
 
+/// <summary>
+/// <see cref="GrpcChannelProvider"/> の生成条件・TLS 分岐・破棄処理を検証するテストです。
+/// </summary>
 public class GrpcChannelProviderTests
 {
     [Fact]
     public void Constructor_WithNullLogger_CreatesChannelAndInvoker()
     {
+        // テスト説明: logger が null でもチャネル生成に成功し、Invoker が取得できることを確認します。
         var options = CreateOptions(useTls: false);
         using var provider = new GrpcChannelProvider(Options.Create(options), logger: null);
 
@@ -21,6 +25,7 @@ public class GrpcChannelProviderTests
     [Fact]
     public void Constructor_WithTlsAndInsecureServerCert_SetsValidationCallback()
     {
+        // テスト説明: TLS + 証明書検証緩和設定時に検証コールバックが設定されることを確認します。
         var options = CreateOptions(useTls: true, allowInsecureServerCertificate: true);
         using var provider = new GrpcChannelProvider(Options.Create(options), logger: null);
 
@@ -33,6 +38,7 @@ public class GrpcChannelProviderTests
     [Fact]
     public void Constructor_MutualTlsWithoutCertificate_ThrowsInvalidOperationException()
     {
+        // テスト説明: mTLS で証明書パス未設定の場合、生成時に例外になることを確認します。
         var options = new GrpcCommunicationOptions
         {
             Connection = new GrpcConnectionOptions
@@ -54,6 +60,7 @@ public class GrpcChannelProviderTests
     [Fact]
     public void Constructor_MutualTlsWithCertificate_LoadsClientCertificate()
     {
+        // テスト説明: mTLS 用 PFX を指定すると SslOptions にクライアント証明書がロードされることを確認します。
         var password = "p@ss";
         var certPath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.pfx");
         try
@@ -100,6 +107,7 @@ public class GrpcChannelProviderTests
     [Fact]
     public void Dispose_CanBeCalled()
     {
+        // テスト説明: 明示的な Dispose 呼び出しで例外が発生しないことを確認します。
         var options = CreateOptions(useTls: false);
         var provider = new GrpcChannelProvider(Options.Create(options), logger: null);
 
@@ -108,6 +116,7 @@ public class GrpcChannelProviderTests
 
     private static GrpcCommunicationOptions CreateOptions(bool useTls, bool allowInsecureServerCertificate = false)
     {
+        // テスト補助: チャネルプロバイダー作成用の最小オプションを返します。
         return new GrpcCommunicationOptions
         {
             Connection = new GrpcConnectionOptions
@@ -126,6 +135,7 @@ public class GrpcChannelProviderTests
 
     private static T GetPrivateField<T>(object instance, string fieldName)
     {
+        // テスト補助: 内部状態確認のため private フィールド値を取得します。
         var field = instance.GetType().GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.NotNull(field);
         return (T)field!.GetValue(instance)!;

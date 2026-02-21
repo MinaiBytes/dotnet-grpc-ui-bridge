@@ -4,11 +4,15 @@ using System.Reflection;
 
 namespace Models.Core.Communication.gRPC.Tests;
 
+/// <summary>
+/// DI 登録拡張とオプション検証ロジックを確認するテストです。
+/// </summary>
 public class ServiceCollectionExtensionsTests
 {
     [Fact]
     public void AddGrpcCommunicationCore_RegistersCoreServices()
     {
+        // テスト説明: 拡張メソッドで通信コアの主要サービスが解決可能になることを検証します。
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddGrpcCommunicationCore(options =>
@@ -36,6 +40,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddGrpcCommunicationCore_InvalidHost_ThrowsOptionsValidationException()
     {
+        // テスト説明: Endpoint 未指定時に Host が不正なら検証エラーになることを確認します。
         using var provider = BuildProvider(options =>
         {
             SetConnection(options, new GrpcConnectionOptions
@@ -55,6 +60,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddGrpcCommunicationCore_InvalidPort_ThrowsOptionsValidationException()
     {
+        // テスト説明: Endpoint 未指定時に Port が不正なら検証エラーになることを確認します。
         using var provider = BuildProvider(options =>
         {
             SetConnection(options, new GrpcConnectionOptions
@@ -72,6 +78,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddGrpcCommunicationCore_ApiKeyModeWithoutKey_ThrowsOptionsValidationException()
     {
+        // テスト説明: ApiKey 認証でキー本体が無い場合に検証エラーになることを確認します。
         using var provider = BuildProvider(options =>
         {
             SetConnection(options, new GrpcConnectionOptions
@@ -95,6 +102,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddGrpcCommunicationCore_MutualTlsWithoutCert_ThrowsOptionsValidationException()
     {
+        // テスト説明: mTLS 選択時に証明書パスが無い場合に検証エラーになることを確認します。
         using var provider = BuildProvider(options =>
         {
             SetConnection(options, new GrpcConnectionOptions
@@ -117,6 +125,7 @@ public class ServiceCollectionExtensionsTests
     [Fact]
     public void AddGrpcCommunicationCore_EndpointSpecified_SkipsHostPortValidation()
     {
+        // テスト説明: Endpoint を直接指定した場合、Host/Port の検証がスキップされることを確認します。
         using var provider = BuildProvider(options =>
         {
             SetConnection(options, new GrpcConnectionOptions
@@ -134,6 +143,7 @@ public class ServiceCollectionExtensionsTests
 
     private static ServiceProvider BuildProvider(Action<GrpcCommunicationOptions> configure)
     {
+        // テスト補助: 最小構成の DI コンテナーを組み立てます。
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddGrpcCommunicationCore(configure);
@@ -142,6 +152,7 @@ public class ServiceCollectionExtensionsTests
 
     private static void SetConnection(GrpcCommunicationOptions options, GrpcConnectionOptions value)
     {
+        // テスト補助: init 専用プロパティへテスト値を設定するため、リフレクションを使用します。
         var property = typeof(GrpcCommunicationOptions).GetProperty(nameof(GrpcCommunicationOptions.Connection), BindingFlags.Instance | BindingFlags.Public);
         Assert.NotNull(property);
         property!.SetValue(options, value);
@@ -149,6 +160,7 @@ public class ServiceCollectionExtensionsTests
 
     private static void SetAuthentication(GrpcCommunicationOptions options, GrpcAuthenticationOptions value)
     {
+        // テスト補助: init 専用プロパティへテスト値を設定するため、リフレクションを使用します。
         var property = typeof(GrpcCommunicationOptions).GetProperty(nameof(GrpcCommunicationOptions.Authentication), BindingFlags.Instance | BindingFlags.Public);
         Assert.NotNull(property);
         property!.SetValue(options, value);
