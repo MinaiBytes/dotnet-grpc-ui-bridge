@@ -18,6 +18,15 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         Action<GrpcCommunicationOptions> configure)
     {
+        if (services is null)
+        {
+            throw new ArgumentNullException(nameof(services));
+        }
+        if (configure is null)
+        {
+            throw new ArgumentNullException(nameof(configure));
+        }
+
         services
             .AddOptions<GrpcCommunicationOptions>()
             .Configure(configure)
@@ -26,6 +35,7 @@ public static class ServiceCollectionExtensions
 
         services.TryAddSingleton<GrpcChannelProvider>();
         services.TryAddSingleton<GrpcTransportCore>();
+        services.TryAddSingleton<GrpcCommunicationSessionFactory>();
 
         return services;
     }

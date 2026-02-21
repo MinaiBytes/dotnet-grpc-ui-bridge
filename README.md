@@ -1,54 +1,48 @@
 # GrpcCommunicationCore
 
-`Models.Core.Communication.gRPC` 名前空間で提供する、軽量な gRPC 通信コアです。  
-GUI でのステータス表示用途を想定し、機能を最小限に絞っています。
+`Models.Core.Communication.gRPC` 名前空間で提供する、WPF/MVVM 向けの軽量 gRPC 通信コアです。  
+役割は「通信の共通化」に限定し、`.proto` 由来のクライアントは 1 つ上の層で扱います。
 
 ## 何ができるか
 
-- 4種類の RPC 実行
-  - Unary
-  - Server Streaming
-  - Client Streaming
-  - Bidirectional Streaming
+- 4種類の RPC を統一 API で実行
+  - `UnaryAsync`
+  - `ServerStreamingAsync`
+  - `ClientStreamingAsync`
+  - `DuplexStreamingAsync`
 - 接続設定の一元化
-  - `Host / Port / Endpoint / TLS / Deadline(任意)`
-- 認証の切替
+  - `Host / Port / Endpoint / TLS / Deadline`
+- 認証モードの切り替え
   - `None / BearerToken / ApiKey / MutualTls`
-- `GrpcChannel` の再利用
-- ZLogger によるテキストログ出力
-- `ObservableCollection` へ反映する `GrpcStreamBindingAdapter<T>` の利用
-
-## ログ方針
-
-- `ILogger<T>` は DI から受け取ります
-- `logger` が `null` の場合は `NullLogger<T>` へフォールバックします
-
-## CPU/メモリチューニング方針
-
-- 既定値は GUI ステータス表示向けの軽量設定です
+- 画面単位セッションの生成と破棄
+  - `GrpcCommunicationSessionFactory`
+- `ObservableCollection` バインディング補助
   - `GrpcStreamBindingAdapter<T>`
-    - `maxItemCount = 2000`
-    - `uiBatchSize = 64`
-    - `trimBatchSize = 256`
-  - `GrpcConnectionOptions`
-    - `DefaultDeadline = TimeSpan.Zero`（既定デッドライン無効）
-    - `KeepAlivePingDelay = Timeout.InfiniteTimeSpan`
-    - `KeepAlivePingTimeout = Timeout.InfiniteTimeSpan`
-- ストリーム受信で先頭削除が多い場合、内部でコレクション再構築に切り替えて CPU 使用率を抑えます
-- 応答遅延より負荷低減を優先したい場合は `uiBatchSize` を増やしてください（例: `128`）
+- ZLogger によるテキストログ出力
 
-## 主要クラス
+## 設計の考え方（要点）
 
-- `GrpcCommunicationOptions`
-  - 接続/認証の設定
-- `GrpcChannelProvider`
-  - `GrpcChannel` と `CallInvoker` の保持
-- `GrpcTransportCore`
-  - 4種類のRPC実行
-- `GrpcStreamBindingAdapter<T>`
-  - UI バインディング補助
+- 通信コアは薄く保つ
+  - gRPC 本体は `Grpc.Net.Client`、DI は `Microsoft.Extensions.*` を利用
+- 画面ライフサイクルと接続ライフサイクルを一致させる
+  - 画面 `Loaded` でセッション作成、`Unloaded` で `Dispose`
+- 低負荷寄りの既定値
+  - KeepAlive 無効、既定デッドライン無効、`EnableMultipleHttp2Connections = false`
+- `ILogger<T>` が `null` の場合は `NullLogger<T>` にフォールバック
 
-## DI 登録
+## 使用パッケージ
+
+- `Grpc.Net.Client`
+- `Grpc.Core.Api`
+- `Microsoft.Extensions.DependencyInjection`
+- `Microsoft.Extensions.Options`
+- `Microsoft.Extensions.Logging.Abstractions`
+- `ZLogger`
+- `CommunityToolkit.Mvvm`
+
+## クイックスタート（推奨構成）
+
+### 1. DI 登録
 
 ```csharp
 using Models.Core.Communication.gRPC;
@@ -59,7 +53,9 @@ services.AddGrpcCommunicationCore(options =>
     {
         Host = "10.0.0.25",
         Port = 50051,
-        UseTls = true
+        UseTls = true,
+        DefaultDeadline = TimeSpan.FromSeconds(10), // 必要なら設定
+        EnableMultipleHttp2Connections = false
     };
 
     options.Authentication = new GrpcAuthenticationOptions
@@ -69,90 +65,39 @@ services.AddGrpcCommunicationCore(options =>
 });
 ```
 
-Bearer トークンを動的取得したい場合は `IBearerTokenProvider` を追加登録します。
+Bearer トークンを動的取得する場合のみ、`IBearerTokenProvider` を別途 DI 登録します。
 
-Unary など短時間RPCに既定デッドラインを適用したい場合:
-
-```csharp
-services.AddGrpcCommunicationCore(options =>
-{
-    options.Connection = new GrpcConnectionOptions
-    {
-        Host = "10.0.0.25",
-        Port = 50051,
-        UseTls = true,
-        DefaultDeadline = TimeSpan.FromSeconds(10)
-    };
-});
-```
-
-必要に応じて Keep-Alive ping を有効化する場合:
+### 2. `.proto` 由来クライアントを使う Gateway を用意
 
 ```csharp
-services.AddGrpcCommunicationCore(options =>
-{
-    options.Connection = new GrpcConnectionOptions
-    {
-        Host = "10.0.0.25",
-        Port = 50051,
-        UseTls = true,
-        KeepAlivePingDelay = TimeSpan.FromSeconds(30),
-        KeepAlivePingTimeout = TimeSpan.FromSeconds(15)
-    };
-});
-```
+using Models.Core.Communication.gRPC;
 
-## `.proto` からの利用例（Server Streaming）
-
-```csharp
 public sealed class MonitorGateway
 {
-    private readonly GrpcChannelProvider _channel;
-    private readonly GrpcTransportCore _transport;
-
-    public MonitorGateway(GrpcChannelProvider channel, GrpcTransportCore transport)
+    public IAsyncEnumerable<CpuUsageReply> StreamCpuUsageAsync(
+        GrpcCommunicationSession session,
+        string machineId,
+        CancellationToken ct)
     {
-        _channel = channel;
-        _transport = transport;
-    }
-
-    public IAsyncEnumerable<CpuUsageReply> StreamCpuUsageAsync(string machineId, CancellationToken ct)
-    {
-        var client = new MonitorService.MonitorServiceClient(_channel.CallInvoker);
+        var client = new MonitorService.MonitorServiceClient(session.CallInvoker);
         var request = new StreamCpuUsageRequest { MachineId = machineId };
 
-        return _transport.ServerStreamingAsync(
+        return session.Transport.ServerStreamingAsync(
             operationName: "MonitorService/StreamCpuUsage",
             callFactory: options => client.StreamCpuUsage(request, options),
             cancellationToken: ct);
     }
-}
-```
 
-## `.proto` からの利用例（Unary: コマンド発行）
-
-```csharp
-public sealed class CommandGateway
-{
-    private readonly GrpcChannelProvider _channel;
-    private readonly GrpcTransportCore _transport;
-
-    public CommandGateway(GrpcChannelProvider channel, GrpcTransportCore transport)
+    public Task<ExecuteCommandReply> ExecuteCommandAsync(
+        GrpcCommunicationSession session,
+        string machineId,
+        string command,
+        CancellationToken ct)
     {
-        _channel = channel;
-        _transport = transport;
-    }
+        var client = new MonitorService.MonitorServiceClient(session.CallInvoker);
+        var request = new ExecuteCommandRequest { MachineId = machineId, Command = command };
 
-    public Task<ExecuteCommandReply> ExecuteCommandAsync(string machineId, string command, CancellationToken ct)
-    {
-        var client = new MonitorService.MonitorServiceClient(_channel.CallInvoker);
-        var request = new ExecuteCommandRequest
-        {
-            MachineId = machineId,
-            Command = command
-        };
-
-        return _transport.UnaryAsync(
+        return session.Transport.UnaryAsync(
             operationName: "MonitorService/ExecuteCommand",
             callExecutor: options => client.ExecuteCommandAsync(request, options).ResponseAsync,
             cancellationToken: ct);
@@ -160,58 +105,23 @@ public sealed class CommandGateway
 }
 ```
 
-## ViewModel でコマンド発行する例（Unary）
+### 3. ViewModel（画面表示中だけ接続）
 
 ```csharp
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-
-public partial class CommandViewModel : ObservableObject
-{
-    private readonly CommandGateway _gateway;
-
-    [ObservableProperty]
-    private string commandText = "restart-service";
-
-    [ObservableProperty]
-    private string resultText = "Not executed";
-
-    public CommandViewModel(CommandGateway gateway)
-    {
-        _gateway = gateway;
-    }
-
-    [RelayCommand]
-    private async Task SendCommandAsync()
-    {
-        try
-        {
-            var reply = await _gateway.ExecuteCommandAsync("PC-001", CommandText, CancellationToken.None);
-            ResultText = $"Success: {reply.ResultMessage}";
-        }
-        catch (RpcException ex)
-        {
-            ResultText = $"Failed: {ex.StatusCode}";
-        }
-    }
-}
-```
-
-## ViewModel で連続更新する例
-
-```csharp
-using CommunityToolkit.Mvvm.ComponentModel;
-using CommunityToolkit.Mvvm.Input;
+using Grpc.Core;
+using Models.Core.Communication.gRPC;
 using System.Collections.ObjectModel;
 
-public partial class CpuUsageViewModel : ObservableObject
+public partial class MonitorViewModel : ObservableObject, IDisposable
 {
+    private readonly GrpcCommunicationSessionFactory _sessionFactory;
     private readonly MonitorGateway _gateway;
-    private readonly GrpcStreamBindingAdapter<CpuUsageReply> _adapter = new(
-        maxItemCount: 1000,
-        uiBatchSize: 64,
-        trimBatchSize: 256);
-    private CancellationTokenSource? _cts;
+    private readonly GrpcStreamBindingAdapter<CpuUsageReply> _adapter = new(maxItemCount: 500, uiBatchSize: 64, trimBatchSize: 128);
+
+    private GrpcCommunicationSession? _session;
+    private CancellationTokenSource? _streamCts;
 
     [ObservableProperty]
     private double currentCpuUsage;
@@ -219,9 +129,17 @@ public partial class CpuUsageViewModel : ObservableObject
     [ObservableProperty]
     private string statusText = "Idle";
 
-    public CpuUsageViewModel(MonitorGateway gateway)
+    [ObservableProperty]
+    private string commandText = "restart-service";
+
+    [ObservableProperty]
+    private string commandResult = "Not executed";
+
+    public MonitorViewModel(GrpcCommunicationSessionFactory sessionFactory, MonitorGateway gateway)
     {
+        _sessionFactory = sessionFactory;
         _gateway = gateway;
+
         _adapter.Items.CollectionChanged += (_, e) =>
         {
             if (e.NewItems is { Count: > 0 } && e.NewItems[e.NewItems.Count - 1] is CpuUsageReply latest)
@@ -234,19 +152,22 @@ public partial class CpuUsageViewModel : ObservableObject
     public ReadOnlyObservableCollection<CpuUsageReply> Samples => _adapter.Items;
 
     [RelayCommand]
-    private async Task StartAsync()
+    private async Task OnLoadedAsync()
     {
-        if (_cts is not null)
+        if (_session is not null)
         {
             return;
         }
 
-        _cts = new CancellationTokenSource();
+        _session = _sessionFactory.CreateSession();
+        _streamCts = new CancellationTokenSource();
         StatusText = "Streaming...";
 
         try
         {
-            await _adapter.BindAsync(_gateway.StreamCpuUsageAsync("PC-001", _cts.Token), cancellationToken: _cts.Token);
+            await _adapter.BindAsync(
+                _gateway.StreamCpuUsageAsync(_session, "PC-001", _streamCts.Token),
+                cancellationToken: _streamCts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -256,39 +177,76 @@ public partial class CpuUsageViewModel : ObservableObject
         {
             StatusText = $"Error: {ex.StatusCode}";
         }
-        finally
+    }
+
+    [RelayCommand]
+    private async Task SendCommandAsync()
+    {
+        if (_session is null)
         {
-            _cts.Dispose();
-            _cts = null;
+            return;
+        }
+
+        try
+        {
+            var reply = await _gateway.ExecuteCommandAsync(_session, "PC-001", CommandText, CancellationToken.None);
+            CommandResult = $"Success: {reply.ResultMessage}";
+        }
+        catch (RpcException ex)
+        {
+            CommandResult = $"Failed: {ex.StatusCode}";
         }
     }
 
     [RelayCommand]
-    private void Stop()
+    private void OnUnloaded()
     {
-        _cts?.Cancel();
+        _streamCts?.Cancel();
+        _streamCts?.Dispose();
+        _streamCts = null;
+        _session?.Dispose();
+        _session = null;
+        StatusText = "Idle";
     }
+
+    public void Dispose() => OnUnloaded();
 }
 ```
 
-## XAML バインディング例
+### 4. XAML バインディング例
 
 ```xml
-<StackPanel Margin="16" Spacing="8">
+<StackPanel Margin="16">
     <TextBlock Text="{Binding CurrentCpuUsage, StringFormat=CPU: {0:F1}%}" />
     <ProgressBar Minimum="0" Maximum="100" Value="{Binding CurrentCpuUsage}" Height="16" />
     <TextBlock Text="{Binding StatusText}" />
-    <Button Content="Start" Command="{Binding StartCommand}" />
-    <Button Content="Stop" Command="{Binding StopCommand}" />
+
+    <TextBox Text="{Binding CommandText, UpdateSourceTrigger=PropertyChanged}" />
+    <TextBlock Text="{Binding CommandResult}" />
+
+    <Button Content="Start" Command="{Binding OnLoadedCommand}" />
+    <Button Content="Send Command" Command="{Binding SendCommandCommand}" />
+    <Button Content="Stop" Command="{Binding OnUnloadedCommand}" />
 </StackPanel>
 ```
 
-## 使用パッケージ
+## 他の RPC を使うとき
 
-- `Grpc.Net.Client`
-- `Grpc.Core.Api`
-- `Microsoft.Extensions.DependencyInjection`
-- `Microsoft.Extensions.Options`
-- `Microsoft.Extensions.Logging.Abstractions`
-- `ZLogger`
-- `CommunityToolkit.Mvvm`
+```csharp
+// Client Streaming
+await session.Transport.ClientStreamingAsync(
+    operationName: "Service/UploadMetrics",
+    callFactory: options => client.UploadMetrics(options),
+    requestStream: requestStream,
+    cancellationToken: ct);
+
+// Bidirectional Streaming
+await foreach (var reply in session.Transport.DuplexStreamingAsync(
+    operationName: "Service/WatchAndControl",
+    callFactory: options => client.WatchAndControl(options),
+    requestStream: requestStream,
+    cancellationToken: ct))
+{
+    // 受信処理
+}
+```

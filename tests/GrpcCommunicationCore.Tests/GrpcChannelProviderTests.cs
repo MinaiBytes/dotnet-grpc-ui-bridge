@@ -36,6 +36,30 @@ public class GrpcChannelProviderTests
     }
 
     [Fact]
+    public void Constructor_UsesEnableMultipleHttp2ConnectionsSetting()
+    {
+        // テスト説明: 接続オプションの EnableMultipleHttp2Connections がハンドラーへ反映されることを確認します。
+        var options = new GrpcCommunicationOptions
+        {
+            Connection = new GrpcConnectionOptions
+            {
+                Host = "127.0.0.1",
+                Port = 50051,
+                UseTls = false,
+                EnableMultipleHttp2Connections = true
+            },
+            Authentication = new GrpcAuthenticationOptions
+            {
+                Mode = GrpcAuthenticationMode.None
+            }
+        };
+        using var provider = new GrpcChannelProvider(Options.Create(options), logger: null);
+
+        var httpHandler = GetPrivateField<SocketsHttpHandler>(provider, "_httpHandler");
+        Assert.True(httpHandler.EnableMultipleHttp2Connections);
+    }
+
+    [Fact]
     public void Constructor_MutualTlsWithoutCertificate_ThrowsInvalidOperationException()
     {
         // テスト説明: mTLS で証明書パス未設定の場合、生成時に例外になることを確認します。
