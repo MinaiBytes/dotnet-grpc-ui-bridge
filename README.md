@@ -165,6 +165,7 @@ public sealed class CommandGateway
 ```csharp
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Grpc.Core;
 
 public partial class CommandViewModel : ObservableObject
 {
@@ -202,6 +203,7 @@ public partial class CommandViewModel : ObservableObject
 ```csharp
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using Grpc.Core;
 using System.Collections.ObjectModel;
 
 public partial class CpuUsageViewModel : ObservableObject
@@ -292,3 +294,13 @@ public partial class CpuUsageViewModel : ObservableObject
 - `Microsoft.Extensions.Logging.Abstractions`
 - `ZLogger`
 - `CommunityToolkit.Mvvm`
+
+## テスト
+
+- テストフレームワーク
+  - `xunit.v3`
+  - `NSubstitute`
+- 実行コマンド
+  - `dotnet test /Users/taiki/Documents/New project/tests/GrpcCommunicationCore.Tests/GrpcCommunicationCore.Tests.csproj -v minimal`
+- カバレッジ計測（Coverlet）
+  - `dotnet test /Users/taiki/Documents/New project/tests/GrpcCommunicationCore.Tests/GrpcCommunicationCore.Tests.csproj -v minimal /p:CollectCoverage=true /p:CoverletOutputFormat=json /p:CoverletOutput=/Users/taiki/Documents/New project/tests/GrpcCommunicationCore.Tests/TestResults/coverage.json`

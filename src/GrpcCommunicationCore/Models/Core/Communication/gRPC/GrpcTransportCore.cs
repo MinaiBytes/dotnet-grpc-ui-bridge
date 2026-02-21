@@ -62,8 +62,7 @@ public sealed class GrpcTransportCore
         }
         catch (RpcException ex)
         {
-            // 文字列ベースで出力することで、ログフォーマッタ依存を減らします。
-            _logger.ZLogWarning($"gRPC unary failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
+            LogRpcFailure("unary", operationName, ex);
             throw;
         }
     }
@@ -84,17 +83,11 @@ public sealed class GrpcTransportCore
         // async iterator では yield を含む try/catch が使えないため、MoveNext 部分のみを捕捉します。
         while (true)
         {
-            bool movedNext;
-            try
-            {
-                movedNext = await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false);
-            }
-
-            catch (RpcException ex)
-            {
-                _logger.ZLogWarning($"gRPC server stream failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
-                throw;
-            }
+            var movedNext = await MoveNextWithLoggingAsync(
+                call.ResponseStream,
+                callOptions.CancellationToken,
+                operationName,
+                "server stream").ConfigureAwait(false);
 
             if (!movedNext)
             {
@@ -133,7 +126,7 @@ public sealed class GrpcTransportCore
         }
         catch (RpcException ex)
         {
-            _logger.ZLogWarning($"gRPC client stream failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
+            LogRpcFailure("client stream", operationName, ex);
             throw;
         }
     }
@@ -160,16 +153,11 @@ public sealed class GrpcTransportCore
             // async iterator では yield を含む try/catch が使えないため、MoveNext 部分のみを捕捉します。
             while (true)
             {
-                bool movedNext;
-                try
-                {
-                    movedNext = await call.ResponseStream.MoveNext(callOptions.CancellationToken).ConfigureAwait(false);
-                }
-                catch (RpcException ex)
-                {
-                    _logger.ZLogWarning($"gRPC duplex stream failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
-                    throw;
-                }
+                var movedNext = await MoveNextWithLoggingAsync(
+                    call.ResponseStream,
+                    callOptions.CancellationToken,
+                    operationName,
+                    "duplex stream").ConfigureAwait(false);
 
                 if (!movedNext)
                 {
@@ -344,6 +332,44 @@ public sealed class GrpcTransportCore
         }
 
         return (CancellationToken.None, null);
+    }
+
+    /// <summary>
+    /// 受信ストリームを 1 ステップ進め、失敗時は共通フォーマットでログします。
+    /// </summary>
+    /// <typeparam name="TResponse">応答要素型です。</typeparam>
+    /// <param name="responseStream">受信ストリームです。</param>
+    /// <param name="cancellationToken">キャンセルトークンです。</param>
+    /// <param name="operationName">呼び出し名です。</param>
+    /// <param name="rpcKind">RPC 種別名です。</param>
+    /// <returns>次要素がある場合は <see langword="true"/>。</returns>
+    private async Task<bool> MoveNextWithLoggingAsync<TResponse>(
+        IAsyncStreamReader<TResponse> responseStream,
+        CancellationToken cancellationToken,
+        string operationName,
+        string rpcKind)
+    {
+        try
+        {
+            return await responseStream.MoveNext(cancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException ex)
+        {
+            LogRpcFailure(rpcKind, operationName, ex);
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// <see cref="RpcException"/> を共通フォーマットでログ出力します。
+    /// </summary>
+    /// <param name="rpcKind">RPC 種別名です。</param>
+    /// <param name="operationName">呼び出し名です。</param>
+    /// <param name="ex">発生した例外です。</param>
+    private void LogRpcFailure(string rpcKind, string operationName, RpcException ex)
+    {
+        // 文字列ベースで出力することで、ログフォーマッタ依存を減らします。
+        _logger.ZLogWarning($"gRPC {rpcKind} failed. operation={operationName} endpoint={_channelProvider.Endpoint} status={ex.StatusCode} detail={ex.Status.Detail}");
     }
 
     /// <summary>

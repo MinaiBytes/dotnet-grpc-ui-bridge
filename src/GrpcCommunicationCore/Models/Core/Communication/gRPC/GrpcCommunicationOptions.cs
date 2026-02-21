@@ -8,10 +8,10 @@ public sealed class GrpcCommunicationOptions
     /// <summary>
     /// 接続設定です。
     /// </summary>
-    public GrpcConnectionOptions Connection { get; init; } = new();
+    public GrpcConnectionOptions Connection { get; set; } = new();
 
     /// <summary>
     /// 認証設定です。
     /// </summary>
-    public GrpcAuthenticationOptions Authentication { get; init; } = new();
+    public GrpcAuthenticationOptions Authentication { get; set; } = new();
 }
